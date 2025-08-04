@@ -1,32 +1,79 @@
-import os, time, shutil, gc, requests, re
-import xml.etree.ElementTree as ET
-from tqdm import tqdm
-from grobid_client.grobid_client import GrobidClient
-from google.colab import drive
+"""
+Script para procesar PDFs en lotes con GROBID y guardar resultados en Google Drive.
 
-# === Montar Google Drive ===
-print("🔗 Conectando a Google Drive...")
+Flujo:
+1. Instala dependencias necesarias (forzando versión estable de grobid-client).
+2. Monta Google Drive en Colab.
+3. Procesa PDFs desde /MyDrive/articles.
+4. Guarda TEI y TXT en /MyDrive/results.
+
+Requisitos:
+- Archivos PDF deben estar en Google Drive, carpeta: /MyDrive/articles
+"""
+
+# ==========================
+# 1. Instalar dependencias
+# ==========================
+import subprocess
+import sys
+
+def install_requirements():
+    print("Instalando dependencias necesarias...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--force-reinstall",
+                    "grobid-client==0.8.8", "tqdm", "requests", "lxml"])
+
+install_requirements()
+
+# ==========================
+# 2. Importar librerías
+# ==========================
+try:
+    from grobid_client.grobid_client import GrobidClient
+except ImportError:
+    from grobid_client import GrobidClient
+
+from google.colab import drive
+import os
+import shutil
+import time
+import gc
+from tqdm import tqdm
+import xml.etree.ElementTree as ET
+import re
+
+# ==========================
+# 3. Configuración inicial
+# ==========================
+print("Conectando a Google Drive...")
 drive.mount('/content/drive')
 
-# === Carpetas fijas ===
-input_folder = "/content/drive/MyDrive/articles"
-output_base = "/content/drive/MyDrive/results"
+input_folder = "/content/drive/MyDrive/articles"   # Carpeta PDFs
+output_base = "/content/drive/MyDrive/results"     # Carpeta resultados
+batch_size = 5                                     # Lote de procesamiento
+
+os.makedirs(output_base, exist_ok=True)
 tei_folder = os.path.join(output_base, "tei")
 txt_folder = os.path.join(output_base, "txt")
 os.makedirs(tei_folder, exist_ok=True)
 os.makedirs(txt_folder, exist_ok=True)
 
-print(f"✅ PDFs deben estar en: {input_folder}")
-print(f"📂 Resultados en: {output_base}")
+# ==========================
+# 4. Iniciar GROBID
+# ==========================
+print("\nClonando y arrancando GROBID...")
+if not os.path.exists("grobid"):
+    subprocess.run(["git", "clone", "https://github.com/kermitt2/grobid.git"], check=True)
+os.chdir("grobid")
+subprocess.run(["./gradlew", "clean", "install"], check=True)
+subprocess.Popen(["./gradlew", "run"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+os.chdir("..")
+time.sleep(120)  # Espera a que el servidor arranque
 
-# === Parámetros ===
-batch_size = 5
-max_retries = 5
-restart_every_n_batches = 10
-
+# ==========================
+# 5. Cliente GROBID
+# ==========================
 client = GrobidClient(grobid_server="http://localhost:8070", timeout=300)
 NS = {'tei': 'http://www.tei-c.org/ns/1.0'}
-
 # === Función extraer texto limpio ===
 def extract_clean_text(xml_path):
     tree = ET.parse(xml_path)
